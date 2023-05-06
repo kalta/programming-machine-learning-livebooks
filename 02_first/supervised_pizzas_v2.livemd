@@ -1,0 +1,253 @@
+# Chapter 2: Your First Learning Program
+
+```elixir
+Mix.install([
+  {:vega_lite, "~> 0.1.6"},
+  {:kino, "~> 0.8.1"},
+  {:kino_vega_lite, "~> 0.1.7"}
+])
+```
+
+## Pizza and Correlation
+
+```elixir
+[_head | list] =
+  Path.join(__DIR__, "pizza.txt")
+  |> File.read!()
+  |> String.split("\r\n", trim: true)
+
+data =
+  for line <- list do
+    # on each line, extract each number
+    [[x], [y]] = Regex.scan(~r/\d+/, line)
+    %{reservations: String.to_integer(x), pizzas: String.to_integer(y)}
+  end
+
+Kino.DataTable.new(data)
+```
+
+### Plot the data
+
+<!-- livebook:{"attrs":{"chart_title":null,"height":400,"layers":[{"active":true,"chart_type":"point","color_field":null,"color_field_aggregate":null,"color_field_bin":false,"color_field_scale_scheme":null,"color_field_type":null,"data_variable":"data","geodata_color":"blue","latitude_field":null,"longitude_field":null,"x_field":"reservations","x_field_aggregate":null,"x_field_bin":false,"x_field_scale_type":null,"x_field_type":"quantitative","y_field":"pizzas","y_field_aggregate":null,"y_field_bin":false,"y_field_scale_type":null,"y_field_type":"quantitative"}],"vl_alias":"Elixir.VegaLite","width":600},"chunks":null,"kind":"Elixir.KinoVegaLite.ChartCell","livebook_object":"smart_cell"} -->
+
+```elixir
+VegaLite.new(width: 600, height: 400)
+|> VegaLite.data_from_values(data, only: ["reservations", "pizzas"])
+|> VegaLite.mark(:point)
+|> VegaLite.encode_field(:x, "reservations", type: :quantitative)
+|> VegaLite.encode_field(:y, "pizzas", type: :quantitative)
+```
+
+## Tracing a Line
+
+```elixir
+defmodule C2.LinearRegression do
+  @doc """
+  Returns a list of predictions.
+  """
+
+  # The function predicts the pizzas from the reservations.
+  # To be more precise, it takes the input variable and the weight,
+  # and it uses them to calculate ŷ.
+  def predict(vX, weight), do: for(x <- vX, do: x * weight)
+
+  @doc """
+  Returns the mean squared error.
+  For each x, calculates vector (x-y)^2 and then median of vector
+  """
+  def loss(vX, vY, weight) do
+    (predict(vX, weight)
+     |> Enum.zip_with(vY, fn x, y -> x - y end)
+     |> Enum.map(fn x -> x * x end)
+     |> Enum.sum()) /
+      length(vX)
+  end
+
+  def train(vX, vY, iterations, lr),
+    do: train(vX, vY, 0, lr, 0, iterations)
+
+  defp train(vX, vY, i, lr, w, iterations) when i <= iterations do
+    current_loss = loss(vX, vY, w)
+
+    IO.puts("Iteration #{i} => Loss: #{current_loss}")
+
+    cond do
+      loss(vX, vY, w + lr) < current_loss ->
+        train(vX, vY, i + 1, lr, w + lr, iterations)
+
+      loss(vX, vY, w - lr) < current_loss ->
+        train(vX, vY, i + 1, lr, w - lr, iterations)
+
+      true ->
+        w
+    end
+  end
+
+  # we exhausted all iterations  
+  defp train(_vX, _vY, _i, _lr, w, _iterations), do: w
+end
+```
+
+### Train the system
+
+```elixir
+# Transform the data to unpack the 2 columns `reservations` and
+# `pizzas` into separate arrays called x and y
+vX = for %{reservations: x} <- data, do: x
+vY = for %{pizzas: y} <- data, do: y
+```
+
+```elixir
+iterations = Kino.Input.number("iterations", default: 10_000)
+```
+
+```elixir
+lr = Kino.Input.number("lr (learning rate)", default: 0.01)
+```
+
+```elixir
+iterations = Kino.Input.read(iterations)
+lr = Kino.Input.read(lr)
+
+w = C2.LinearRegression.train(vX, vY, iterations, lr)
+```
+
+### Predict the number of pizzas
+
+```elixir
+C2.LinearRegression.predict([20], w)
+```
+
+```elixir
+# Compute the predictions
+
+vX2 = 0..Enum.max(vX)
+vY2 = C2.LinearRegression.predict(vX2, w)
+predictions = Enum.zip_with(vX2, vY2, fn x, y -> %{x: x, prediction: y} end)
+```
+
+<!-- livebook:{"attrs":{"chart_title":null,"height":400,"layers":[{"active":true,"chart_type":"point","color_field":null,"color_field_aggregate":null,"color_field_bin":false,"color_field_scale_scheme":null,"color_field_type":null,"data_variable":"data","geodata_color":"blue","latitude_field":null,"longitude_field":null,"x_field":"reservations","x_field_aggregate":null,"x_field_bin":false,"x_field_scale_type":null,"x_field_type":"quantitative","y_field":"pizzas","y_field_aggregate":null,"y_field_bin":false,"y_field_scale_type":null,"y_field_type":"quantitative"},{"active":true,"chart_type":"line","color_field":null,"color_field_aggregate":null,"color_field_bin":false,"color_field_scale_scheme":null,"color_field_type":null,"data_variable":"predictions","geodata_color":"blue","latitude_field":null,"longitude_field":null,"x_field":"x","x_field_aggregate":null,"x_field_bin":false,"x_field_scale_type":null,"x_field_type":"quantitative","y_field":"prediction","y_field_aggregate":null,"y_field_bin":false,"y_field_scale_type":null,"y_field_type":"quantitative"}],"vl_alias":"Elixir.VegaLite","width":600},"chunks":null,"kind":"Elixir.KinoVegaLite.ChartCell","livebook_object":"smart_cell"} -->
+
+```elixir
+VegaLite.new(width: 600, height: 400)
+|> VegaLite.layers([
+  VegaLite.new()
+  |> VegaLite.data_from_values(data, only: ["reservations", "pizzas"])
+  |> VegaLite.mark(:point)
+  |> VegaLite.encode_field(:x, "reservations", type: :quantitative)
+  |> VegaLite.encode_field(:y, "pizzas", type: :quantitative),
+  VegaLite.new()
+  |> VegaLite.data_from_values(predictions, only: ["x", "prediction"])
+  |> VegaLite.mark(:line)
+  |> VegaLite.encode_field(:x, "x", type: :quantitative)
+  |> VegaLite.encode_field(:y, "prediction", type: :quantitative)
+])
+```
+
+## Adding a Bias
+
+```elixir
+defmodule C2.LinearRegressionWithBias do
+  @doc """
+  Returns a list of predictions.
+  """
+
+  def predict(vX, weight, bias), do: for(x <- vX, do: x * weight + bias)
+
+  @doc """
+  Returns the mean squared error.
+  """
+  def loss(vX, vY, weight, bias) do
+    (predict(vX, weight, bias)
+     |> Enum.zip_with(vY, fn x, y -> x - y end)
+     |> Enum.map(fn x -> x * x end)
+     |> Enum.sum()) /
+      length(vX)
+  end
+
+  def train(vX, vY, iterations, lr),
+    do: train(vX, vY, 0, lr, 0, 0, iterations)
+
+  defp train(vX, vY, i, lr, w, b, iterations) when i <= iterations do
+    current_loss = loss(vX, vY, w, b)
+
+    IO.puts("Iteration #{i} => Loss: #{current_loss}")
+
+    cond do
+      loss(vX, vY, w + lr, b) < current_loss ->
+        train(vX, vY, i + 1, lr, w + lr, b, iterations)
+
+      loss(vX, vY, w - lr, b) < current_loss ->
+        train(vX, vY, i + 1, lr, w - lr, b, iterations)
+
+      loss(vX, vY, w, b + lr) < current_loss ->
+        train(vX, vY, i + 1, lr, w, b + lr, iterations)
+
+      loss(vX, vY, w, b - lr) < current_loss ->
+        train(vX, vY, i + 1, lr, w, b - lr, iterations)
+
+      true ->
+        %{weight: w, bias: b}
+    end
+  end
+
+  # we finish all iterations  
+  defp train(_vX, _vY, _i, _lr, w, b, _iterations), do: %{weight: w, bias: b}
+end
+```
+
+### Train the system
+
+```elixir
+iterations = Kino.Input.number("iterations", default: 10_000)
+```
+
+```elixir
+lr = Kino.Input.number("lr (learning rate)", default: 0.01)
+```
+
+```elixir
+iterations = Kino.Input.read(iterations)
+lr = Kino.Input.read(lr)
+
+%{weight: w2, bias: bias} =
+  C2.LinearRegressionWithBias.train(vX, vY, iterations = 10_000, lr = 0.01)
+```
+
+### Predict the number of pizzas
+
+```elixir
+n_reservations = Kino.Input.number("number of reservations", default: 20)
+```
+
+```elixir
+n = Kino.Input.read(n_reservations)
+
+C2.LinearRegressionWithBias.predict([n], w2, bias)
+```
+
+```elixir
+# Compute the predictions 
+
+vX2 = 0..Enum.max(vX)
+vY2 = C2.LinearRegressionWithBias.predict(vX2, w2, bias)
+predictions = Enum.zip_with(vX2, vY2, fn x, y -> %{x: x, prediction: y} end)
+```
+
+<!-- livebook:{"attrs":{"chart_title":null,"height":400,"layers":[{"active":true,"chart_type":"point","color_field":null,"color_field_aggregate":null,"color_field_bin":false,"color_field_scale_scheme":null,"color_field_type":null,"data_variable":"data","geodata_color":"blue","latitude_field":null,"longitude_field":null,"x_field":"reservations","x_field_aggregate":null,"x_field_bin":false,"x_field_scale_type":null,"x_field_type":"quantitative","y_field":"pizzas","y_field_aggregate":null,"y_field_bin":false,"y_field_scale_type":null,"y_field_type":"quantitative"},{"active":true,"chart_type":"line","color_field":null,"color_field_aggregate":null,"color_field_bin":false,"color_field_scale_scheme":null,"color_field_type":null,"data_variable":"predictions","geodata_color":"blue","latitude_field":null,"longitude_field":null,"x_field":"x","x_field_aggregate":null,"x_field_bin":false,"x_field_scale_type":null,"x_field_type":"quantitative","y_field":"prediction","y_field_aggregate":null,"y_field_bin":false,"y_field_scale_type":null,"y_field_type":"quantitative"}],"vl_alias":"Elixir.VegaLite","width":600},"chunks":null,"kind":"Elixir.KinoVegaLite.ChartCell","livebook_object":"smart_cell"} -->
+
+```elixir
+VegaLite.new(width: 600, height: 400)
+|> VegaLite.layers([
+  VegaLite.new()
+  |> VegaLite.data_from_values(data, only: ["reservations", "pizzas"])
+  |> VegaLite.mark(:point)
+  |> VegaLite.encode_field(:x, "reservations", type: :quantitative)
+  |> VegaLite.encode_field(:y, "pizzas", type: :quantitative),
+  VegaLite.new()
+  |> VegaLite.data_from_values(predictions, only: ["x", "prediction"])
+  |> VegaLite.mark(:line)
+  |> VegaLite.encode_field(:x, "x", type: :quantitative)
+  |> VegaLite.encode_field(:y, "prediction", type: :quantitative)
+])
+```
