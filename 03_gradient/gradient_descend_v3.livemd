@@ -1,0 +1,240 @@
+# Chapter 3: Walking the Gradient
+
+```elixir
+Mix.install([
+  {:vega_lite, "~> 0.1.6"},
+  {:kino, "~> 0.8.1"},
+  {:kino_vega_lite, "~> 0.1.7"},
+  {:explorer, "~> 0.5.6"},
+  {:kino_explorer, "~> 0.1.4"}
+])
+```
+
+## Read the data
+
+```elixir
+data =
+  Path.join(__DIR__, "pizza.txt")
+  |> File.read!()
+  # convert any two or more spaces into a comma
+  |> String.replace(~r/[[:blank:]]{2,}/, ",")
+  |> Explorer.DataFrame.load_csv!()
+```
+
+## Linear regression with bias
+
+☝️ From chapter 2
+
+```elixir
+alias Explorer.Series
+
+defmodule C2.LinearRegressionWithBias do
+  @doc """
+  Returns a list of predictions.
+  """
+
+  def predict(vX, weight, bias),
+    do: Series.multiply(vX, weight) |> Series.add(bias)
+
+  @doc """
+  Returns the mean squared error.
+  """
+  def loss(vX, vY, weight, bias),
+    do:
+      predict(vX, weight, bias)
+      |> Series.subtract(vY)
+      |> Series.pow(2)
+      |> Series.mean()
+
+  def train(vX, vY, iterations, lr),
+    do: train(vX, vY, 0, lr, 0, 0, iterations)
+
+  defp train(vX, vY, i, lr, w, b, iterations) when i <= iterations do
+    current_loss = loss(vX, vY, w, b)
+
+    IO.puts("Iteration #{i} => Loss: #{current_loss}")
+
+    cond do
+      loss(vX, vY, w + lr, b) < current_loss ->
+        train(vX, vY, i + 1, lr, w + lr, b, iterations)
+
+      loss(vX, vY, w - lr, b) < current_loss ->
+        train(vX, vY, i + 1, lr, w - lr, b, iterations)
+
+      loss(vX, vY, w, b + lr) < current_loss ->
+        train(vX, vY, i + 1, lr, w, b + lr, iterations)
+
+      loss(vX, vY, w, b - lr) < current_loss ->
+        train(vX, vY, i + 1, lr, w, b - lr, iterations)
+
+      true ->
+        %{weight: w, bias: b}
+    end
+  end
+
+  # we finish all iterations  
+  defp train(_vX, _vY, _i, _lr, w, b, _iterations), do: %{weight: w, bias: b}
+end
+```
+
+### Plot the loss curve
+
+```elixir
+vX = data["Reservations"]
+vY = data["Pizzas"]
+
+alias VegaLite, as: Vl
+
+# Generate a sequence that will be used as `weigth`
+# From -1 to -4, step 0.01
+weights = Enum.map(-100..400, &(&1 / 100))
+
+# Compute the loss for each weight, with bias=0
+losses = Enum.map(weights, &C2.LinearRegressionWithBias.loss(vX, vY, &1, 0))
+
+# Get the min loss index
+min_loss_index =
+  losses
+  |> Series.from_list()
+  |> Series.argsort()
+  |> Series.first()
+
+df1 = Explorer.DataFrame.new(weight: weights, loss: losses)
+
+Vl.new(width: 600, height: 400)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.data_from_values(df1)
+  |> Vl.mark(:line)
+  |> Vl.encode_field(:x, "weight", type: :quantitative)
+  |> Vl.encode_field(:y, "loss", type: :quantitative),
+  Vl.new()
+  |> Vl.data_from_values(
+    weight: [Enum.at(weights, min_loss_index)],
+    min_loss: [Enum.at(losses, min_loss_index)]
+  )
+  |> Vl.mark(:circle, tooltip: true, size: "100", color: "red")
+  |> Vl.encode_field(:x, "weight", type: :quantitative)
+  |> Vl.encode_field(:y, "min_loss", type: :quantitative, title: "loss")
+])
+```
+
+## Gradient Descent
+
+```elixir
+defmodule C3.LinearRegressionWithoutBias do
+  def predict(vX, weight, bias),
+    do: Series.multiply(vX, weight) |> Series.add(bias)
+
+  @doc """
+  Returns the mean squared error.
+  """
+  def loss(vX, vY, weight, bias),
+    do:
+      predict(vX, weight, bias)
+      |> Series.subtract(vY)
+      |> Series.pow(2)
+      |> Series.mean()
+
+  @doc """
+  Returns the derivate of the loss curve
+  """
+  def gradient(vX, vY, weight) do
+    2 * (vX |> predict(weight, 0) |> Series.subtract(vY) |> Series.multiply(vX) |> Series.mean())
+  end
+
+  def train(vX, vY, iterations, lr) do
+    Enum.reduce(0..iterations, 0, fn i, weight ->
+      IO.puts("Iteration #{i} => Loss: #{loss(vX, vY, weight, 0)}")
+      weight - gradient(vX, vY, weight) * lr
+    end)
+  end
+end
+```
+
+### Train the system
+
+```elixir
+iterations = Kino.Input.number("iterations", default: 100)
+```
+
+```elixir
+lr = Kino.Input.number("lr (learning rate)", default: 0.001)
+```
+
+```elixir
+iterations = Kino.Input.read(iterations)
+lr = Kino.Input.read(lr)
+
+weight = C3.LinearRegressionWithoutBias.train(vX, vY, iterations = 100, lr = 0.001)
+```
+
+## Putting Gradient Descent to the Test
+
+```elixir
+defmodule C3.LinearRegressionWithBias do
+  def predict(vX, weight, bias),
+    do: Series.multiply(vX, weight) |> Series.add(bias)
+
+  @doc """
+  Returns the mean squared error.
+  """
+  def loss(vX, vY, weight, bias),
+    do:
+      predict(vX, weight, bias)
+      |> Series.subtract(vY)
+      |> Series.pow(2)
+      |> Series.mean()
+
+  @doc """
+  Returns the derivate of the loss curve
+  """
+
+  def gradient(vX, vY, weight, bias) do
+    errors = vX |> predict(weight, bias) |> Series.subtract(vY)
+    w_gradient = 2 * (errors |> Series.multiply(vX) |> Series.mean())
+    b_gradient = 2 * (errors |> Series.mean())
+    {w_gradient, b_gradient}
+  end
+
+  def train(vX, vY, iterations, lr) do
+    Enum.reduce(0..iterations, %{weight: 0, bias: 0}, fn i, %{weight: weight, bias: bias} ->
+      IO.puts("Iteration #{i} => Loss: #{loss(vX, vY, weight, bias)}")
+
+      {w_gradient, b_gradient} = gradient(vX, vY, weight, bias)
+      %{weight: weight - w_gradient * lr, bias: bias - b_gradient * lr}
+    end)
+  end
+end
+```
+
+### Train the system
+
+```elixir
+iterations = Kino.Input.number("iterations", default: 20_000)
+```
+
+```elixir
+lr = Kino.Input.number("lr (learning rate)", default: 0.001)
+```
+
+```elixir
+iterations = Kino.Input.read(iterations)
+lr = Kino.Input.read(lr)
+
+%{weight: weight, bias: bias} =
+  C3.LinearRegressionWithBias.train(vX, vY, iterations = iterations, lr = lr)
+```
+
+### Predict the number of pizzas
+
+```elixir
+n_reservations = Kino.Input.number("number of reservations", default: 20)
+```
+
+```elixir
+n = Kino.Input.read(n_reservations)
+vX2 = Series.from_list([n])
+
+C3.LinearRegressionWithBias.predict(vX2, weight, bias) |> Series.to_list()
+```
